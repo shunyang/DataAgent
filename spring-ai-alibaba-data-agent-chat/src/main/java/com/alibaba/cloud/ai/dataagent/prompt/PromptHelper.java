@@ -16,12 +16,13 @@
 package com.alibaba.cloud.ai.dataagent.prompt;
 
 import com.alibaba.cloud.ai.dataagent.common.connector.config.DbConfig;
+import com.alibaba.cloud.ai.dataagent.common.enums.BizDataSourceTypeEnum;
 import com.alibaba.cloud.ai.dataagent.dto.schema.ColumnDTO;
 import com.alibaba.cloud.ai.dataagent.dto.schema.SchemaDTO;
 import com.alibaba.cloud.ai.dataagent.dto.schema.TableDTO;
 import com.alibaba.cloud.ai.dataagent.entity.SemanticModel;
 import com.alibaba.cloud.ai.dataagent.entity.UserPromptConfig;
-import com.alibaba.cloud.ai.dataagent.common.enums.BizDataSourceTypeEnum;
+import com.alibaba.cloud.ai.dataagent.util.DatabaseDialectHelper;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.BooleanUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -208,11 +209,13 @@ public class PromptHelper {
 			String evidence) {
 		String schemaInfo = buildMixMacSqlDbPrompt(schemaDTO, true);
 		String dialect = BizDataSourceTypeEnum.fromTypeName(dbConfig.getDialectType()).getDialect();
+		String dialectGuidelines = DatabaseDialectHelper.getDialectSpecificGuidelines(dbConfig.getDialectType());
 		Map<String, Object> params = new HashMap<>();
 		params.put("dialect", dialect);
 		params.put("question", question);
 		params.put("schema_info", schemaInfo);
 		params.put("evidence", evidence);
+		params.put("dialect_guidelines", dialectGuidelines);
 		List<String> prompts = new ArrayList<>();
 		prompts.add(PromptConstant.getMixSqlGeneratorSystemPromptTemplate().render(params));
 		prompts.add(PromptConstant.getMixSqlGeneratorPromptTemplate().render(params));
@@ -247,7 +250,8 @@ public class PromptHelper {
 	 * @return built prompt
 	 */
 	public static String buildReportGeneratorPromptWithOptimization(String userRequirementsAndPlan,
-			String analysisStepsAndData, String summaryAndRecommendations, List<UserPromptConfig> optimizationConfigs) {
+			String analysisStepsAndData, String summaryAndRecommendations, List<UserPromptConfig> optimizationConfigs,
+			boolean plainReport) {
 
 		Map<String, Object> params = new HashMap<>();
 		params.put("user_requirements_and_plan", userRequirementsAndPlan);
@@ -258,17 +262,22 @@ public class PromptHelper {
 		String optimizationSection = buildOptimizationSection(optimizationConfigs, params);
 		params.put("optimization_section", optimizationSection);
 
-		// Render using the default report generator template
-		return PromptConstant.getReportGeneratorPromptTemplate().render(params);
+		// Render using the chosen report generator template
+		return (plainReport ? PromptConstant.getReportGeneratorPlainPromptTemplate()
+				: PromptConstant.getReportGeneratorPromptTemplate())
+			.render(params);
 	}
 
 	public static String buildSqlErrorFixerPrompt(String question, DbConfig dbConfig, SchemaDTO schemaDTO,
 			String evidence, String errorSql, String errorMessage) {
 		String schemaInfo = buildMixMacSqlDbPrompt(schemaDTO, true);
 		String dialect = BizDataSourceTypeEnum.fromTypeName(dbConfig.getDialectType()).getDialect();
+		// Generate dialect-specific guidelines
+		String dialectGuidelines = DatabaseDialectHelper.getDialectSpecificGuidelines(dbConfig.getDialectType());
 
 		Map<String, Object> params = new HashMap<>();
 		params.put("dialect", dialect);
+		params.put("dialect_guidelines", dialectGuidelines);
 		params.put("question", question);
 		params.put("schema_info", schemaInfo);
 		params.put("evidence", evidence);
@@ -285,6 +294,16 @@ public class PromptHelper {
 		else
 			params.put("businessKnowledge", "无");
 		return PromptConstant.getBusinessKnowledgePromptTemplate().render(params);
+	}
+
+	// agentKnowledge
+	public static String buildAgentKnowledgePrompt(String agentKnowledge) {
+		Map<String, Object> params = new HashMap<>();
+		if (StringUtils.isNotBlank(agentKnowledge))
+			params.put("agentKnowledge", agentKnowledge);
+		else
+			params.put("agentKnowledge", "无");
+		return PromptConstant.getAgentKnowledgePromptTemplate().render(params);
 	}
 
 	public static String buildSemanticModelPrompt(List<SemanticModel> semanticModels) {
@@ -369,6 +388,19 @@ public class PromptHelper {
 		params.put("evidence", evidence != null ? evidence : "");
 		params.put("multi_turn", multiTurn != null ? multiTurn : "(无)");
 		return PromptConstant.getFeasibilityAssessmentPromptTemplate().render(params);
+	}
+
+	/**
+	 * 构建查询重写提示词
+	 * @param multiTurn 多轮对话历史
+	 * @param latestQuery 最新用户输入
+	 * @return 查询重写提示词
+	 */
+	public static String buildEvidenceQueryRewritePrompt(String multiTurn, String latestQuery) {
+		Map<String, Object> params = new HashMap<>();
+		params.put("multi_turn", multiTurn != null ? multiTurn : "(无)");
+		params.put("latest_query", latestQuery);
+		return PromptConstant.getEvidenceQueryRewritePromptTemplate().render(params);
 	}
 
 	/**
