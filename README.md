@@ -6,6 +6,12 @@
 
 这是一个基于Spring AI Alibaba Graph的企业级智能数据分析 Agent。它不仅是 Text-to-SQL 转换器，更是一个具备支持 Python 深度分析与报告生成的 AI 虚拟数据分析师。（readme不是最新的，以最新代码为主）
 
+系统采用高度可扩展的架构设计，**全面兼容 OpenAI 接口规范**的对话模型与 Embedding 模型，并支持**灵活挂载任意向量数据库**。无论是私有化部署还是接入主流大模型服务，都能轻松适配，为企业提供灵活、可控的数据洞察服务。
+
+同时，本项目可以支持**发布成MCP服务器**，具体看 本文档mcp章节。
+
+
+
 ## 项目结构
 
 这个项目分为三个部分：
@@ -95,6 +101,104 @@ spring:
 | spring.ai.alibaba.data-agent.embedding-batch.max-text-count     | 每批次最大文本数量 适用于DashScope等有文本数量限制的API DashScope限制为10 | 10          |
 
 #### 2.5 向量库配置
+
+系统默认使用内存向量库，同时系统提供了对es的混合检索支持。
+
+##### 2.5.1 向量库依赖引入
+
+您可以自行引入你想要的持久化向量库，只需要往ioc容器提供一个org.springframework.ai.vectorstore.VectorStore类型的bean即可。例如直接引入PGvector的starter
+
+```java
+<dependency>
+	<groupId>org.springframework.ai</groupId>
+	<artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
+</dependency>
+```
+
+详细对应的向量库参考文档https://springdoc.cn/spring-ai/api/vectordbs.html
+
+##### 2.5.2 向量库schema设置
+
+以下为es的schema结构，其他向量库如milvus，pg等自行可根据如下的es的结构建立自己的schema.尤其要注意metadata中的每个字段的数据类型。
+
+```json
+{
+  "mappings": {
+    "properties": {
+      "content": {
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "embedding": {
+        "type": "dense_vector",
+        "dims": 1024,
+        "index": true,
+        "similarity": "cosine",
+        "index_options": {
+          "type": "int8_hnsw",
+          "m": 16,
+          "ef_construction": 100
+        }
+      },
+      "id": {
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "metadata": {
+        "properties": {
+          "agentId": {
+            "type": "text",
+            "fields": {
+              "keyword": {
+                "type": "keyword",
+                "ignore_above": 256
+              }
+            }
+          },
+          "agentKnowledgeId": {
+            "type": "long"
+          },
+          "businessTermId": {
+            "type": "long"
+          },
+          "concreteAgentKnowledgeType": {
+            "type": "text",
+            "fields": {
+              "keyword": {
+                "type": "keyword",
+                "ignore_above": 256
+              }
+            }
+          },
+          "vectorType": {
+            "type": "text",
+            "fields": {
+              "keyword": {
+                "type": "keyword",
+                "ignore_above": 256
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+
+
+
 
 | 属性                                                         | 说明                                                         | 默认值    |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | --------- |
@@ -244,6 +348,99 @@ yarn dev
 “显示SQL运行结果”会在生成SQL和运行获取结果后，将SQL运行结果展示给用户。
 
 ![show-sql-result.png](img/show-sql-result.png)
+
+
+
+## MCP服务器
+
+1、本项目是通过Mcp server Boot Starter实现mcp服务器的，因此更多详细配置可以参考文档
+
+https://springdoc.cn/spring-ai/api/mcp/mcp-server-boot-starter-docs.html#_%E9%85%8D%E7%BD%AE%E5%B1%9E%E6%80%A7
+
+默认mcp  Web 传输的自定义 SSE 端点路径： 项目地址:项目端口/sse 。例如 http://localhost:8065/sse
+
+你也可通过`spring.ai.mcp.server.sse-endpoint` 修改为其他路径，具体看上面提到的mcp参考文档。
+
+2、目前提供的mcp工具如下
+
+```json
+{
+  "tools": [
+    {
+      "name": "nl2SqlToolCallback",
+      "description": "将自然语言查询转换为SQL语句。使用指定的智能体将用户的自然语言查询描述转换为可执行的SQL语句，支持复杂的数据查询需求。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "nl2SqlRequest": {
+            "type": "object",
+            "properties": {
+              "agentId": {
+                "type": "string",
+                "description": "智能体ID，用于指定使用哪个智能体进行NL2SQL转换"
+              },
+              "naturalQuery": {
+                "type": "string",
+                "description": "自然语言查询描述，例如：'查询销售额最高的10个产品'"
+              }
+            },
+            "required": [
+              "agentId",
+              "naturalQuery"
+            ]
+          }
+        },
+        "required": [
+          "nl2SqlRequest"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "listAgentsToolCallback",
+      "description": "查询智能体列表，支持按状态和关键词过滤。可以根据智能体的状态（如已发布PUBLISHED、草稿DRAFT等）进行过滤，也可以通过关键词搜索智能体的名称、描述或标签。返回按创建时间降序排列的智能体列表。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentListRequest": {
+            "type": "object",
+            "properties": {
+              "keyword": {
+                "type": "string",
+                "description": "按关键词搜索智能体名称或描述"
+              },
+              "status": {
+                "type": "string",
+                "description": "按状态过滤，例如 '状态：draft-待发布，published-已发布，offline-已下线"
+              }
+            },
+            "required": [
+              "keyword",
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "agentListRequest"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
+```
+
+
+
+3、如需本地自行调试mcp服务器功能可通过如下命令跳转到调试页面
+
+```typescript
+ npx @modelcontextprotocol/inspector http://localhost:8065/mcp/connection
+```
+
+
+
+
 
 ## 如何贡献
 

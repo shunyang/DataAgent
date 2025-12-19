@@ -212,7 +212,7 @@ public class GraphServiceImpl implements GraphService {
 					.tryEmitNext(ServerSentEvent
 						.builder(GraphNodeResponse.error(agentId, threadId,
 								"Error in stream processing: " + error.getMessage()))
-						.event("error")
+						.event(STREAM_EVENT_ERROR)
 						.build());
 				context.getSink().tryEmitComplete();
 			}
@@ -232,7 +232,7 @@ public class GraphServiceImpl implements GraphService {
 			if (context.getSink().currentSubscriberCount() > 0) {
 				context.getSink()
 					.tryEmitNext(ServerSentEvent.builder(GraphNodeResponse.complete(agentId, threadId))
-						.event("complete")
+						.event(STREAM_EVENT_COMPLETE)
 						.build());
 				context.getSink().tryEmitComplete();
 			}
@@ -261,6 +261,11 @@ public class GraphServiceImpl implements GraphService {
 		String node = output.node();
 		String chunk = output.chunk();
 		log.debug("Received Stream output: {}", chunk);
+
+		if (chunk == null || chunk.isEmpty()) {
+			return;
+		}
+
 		// 如果是文本标记符号，则更新文本类型
 		TextType originType = context.getTextType();
 		TextType textType;

@@ -83,8 +83,6 @@ public class ReportGeneratorNode implements NodeAction {
 
 		boolean plainReport = StateUtil.getObjectValue(state, PLAIN_REPORT, Boolean.class, false);
 
-		log.info("Planner node output: {}", plannerNodeOutput);
-
 		// Parse plan and get current step
 		Plan plan = converter.convert(plannerNodeOutput);
 		ExecutionStep executionStep = getCurrentExecutionStep(plan, currentStep);
@@ -162,6 +160,8 @@ public class ReportGeneratorNode implements NodeAction {
 		String reportPrompt = PromptHelper.buildReportGeneratorPromptWithOptimization(userRequirementsAndPlan,
 				analysisStepsAndData, summaryAndRecommendations, optimizationConfigs, plainReport);
 
+		log.debug("Report Node Prompt: \n {}", reportPrompt);
+
 		log.info("Using {} prompt for report generation",
 				!optimizationConfigs.isEmpty() ? "optimized (" + optimizationConfigs.size() + " configs)" : "default");
 
@@ -186,7 +186,7 @@ public class ReportGeneratorNode implements NodeAction {
 			sb.append("### 步骤 ").append(i + 1).append(": 步骤编号 ").append(step.getStep()).append("\n");
 			sb.append("**工具**: ").append(step.getToolToUse()).append("\n");
 			if (step.getToolParameters() != null) {
-				sb.append("**参数描述**: ").append(step.getToolParameters().getDescription()).append("\n");
+				sb.append("**参数描述**: ").append(step.getToolParameters().getInstruction()).append("\n");
 			}
 			sb.append("\n");
 		}
@@ -220,7 +220,7 @@ public class ReportGeneratorNode implements NodeAction {
 						sb.append("**步骤编号**: ").append(step.getStep()).append("\n");
 						sb.append("**使用工具**: ").append(step.getToolToUse()).append("\n");
 						if (step.getToolParameters() != null) {
-							sb.append("**参数描述**: ").append(step.getToolParameters().getDescription()).append("\n");
+							sb.append("**参数描述**: ").append(step.getToolParameters().getInstruction()).append("\n");
 							if (step.getToolParameters().getSqlQuery() != null) {
 								sb.append("**执行SQL**: \n```sql\n")
 									.append(step.getToolParameters().getSqlQuery())
