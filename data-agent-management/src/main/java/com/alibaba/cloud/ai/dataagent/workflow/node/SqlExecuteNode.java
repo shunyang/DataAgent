@@ -1,11 +1,11 @@
 /*
- * Copyright 2025 the original author or authors.
+ * Copyright 2024-2026 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      https://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,35 +13,49 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package com.alibaba.cloud.ai.dataagent.workflow.node;
 
-import com.alibaba.cloud.ai.dataagent.connector.accessor.Accessor;
-import com.alibaba.cloud.ai.dataagent.connector.DbQueryParameter;
-import com.alibaba.cloud.ai.dataagent.bo.schema.ResultSetBO;
+import static com.alibaba.cloud.ai.dataagent.constant.Constant.PLAN_CURRENT_STEP;
+import static com.alibaba.cloud.ai.dataagent.constant.Constant.SQL_EXECUTE_NODE_OUTPUT;
+import static com.alibaba.cloud.ai.dataagent.constant.Constant.SQL_GENERATE_COUNT;
+import static com.alibaba.cloud.ai.dataagent.constant.Constant.SQL_GENERATE_OUTPUT;
+import static com.alibaba.cloud.ai.dataagent.constant.Constant.SQL_REGENERATE_REASON;
+import static com.alibaba.cloud.ai.dataagent.constant.Constant.SQL_RESULT_LIST_MEMORY;
+
 import com.alibaba.cloud.ai.dataagent.bo.DbConfigBO;
+import com.alibaba.cloud.ai.dataagent.bo.schema.DisplayStyleBO;
+import com.alibaba.cloud.ai.dataagent.bo.schema.ResultBO;
+import com.alibaba.cloud.ai.dataagent.bo.schema.ResultSetBO;
+import com.alibaba.cloud.ai.dataagent.connector.DbQueryParameter;
+import com.alibaba.cloud.ai.dataagent.connector.accessor.Accessor;
 import com.alibaba.cloud.ai.dataagent.constant.Constant;
-import com.alibaba.cloud.ai.dataagent.enums.TextType;
 import com.alibaba.cloud.ai.dataagent.dto.datasource.SqlRetryDto;
-
-import com.alibaba.cloud.ai.dataagent.service.nl2sql.Nl2SqlService;
-
 import com.alibaba.cloud.ai.dataagent.dto.planner.ExecutionStep;
-import com.alibaba.cloud.ai.dataagent.util.*;
+import com.alibaba.cloud.ai.dataagent.enums.TextType;
+import com.alibaba.cloud.ai.dataagent.prompt.PromptLoader;
+import com.alibaba.cloud.ai.dataagent.properties.DataAgentProperties;
+import com.alibaba.cloud.ai.dataagent.service.llm.LlmService;
+import com.alibaba.cloud.ai.dataagent.service.nl2sql.Nl2SqlService;
+import com.alibaba.cloud.ai.dataagent.util.ChatResponseUtil;
+import com.alibaba.cloud.ai.dataagent.util.DatabaseUtil;
+import com.alibaba.cloud.ai.dataagent.util.FluxUtil;
+import com.alibaba.cloud.ai.dataagent.util.JsonUtil;
+import com.alibaba.cloud.ai.dataagent.util.MarkdownParserUtil;
+import com.alibaba.cloud.ai.dataagent.util.PlanProcessUtil;
+import com.alibaba.cloud.ai.dataagent.util.StateUtil;
 import com.alibaba.cloud.ai.graph.GraphResponse;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import static com.alibaba.cloud.ai.dataagent.constant.Constant.*;
 
 /**
  * SQL execution node that executes SQL queries against the database.
@@ -60,6 +74,12 @@ public class SqlExecuteNode implements NodeAction {
 	private final DatabaseUtil databaseUtil;
 
 	private final Nl2SqlService nl2SqlService;
+
+	private final LlmService llmService;
+
+	private final DataAgentProperties properties;
+
+	private static final int SAMPLE_DATA_NUMBER = 20;
 
 	@Override
 	public Map<String, Object> apply(OverAllState state) throws Exception {
@@ -116,24 +136,31 @@ public class SqlExecuteNode implements NodeAction {
 			emitter.next(ChatResponseUtil.createPureResponse(TextType.SQL.getStartSign()));
 			emitter.next(ChatResponseUtil.createResponse(sqlQuery));
 			emitter.next(ChatResponseUtil.createPureResponse(TextType.SQL.getEndSign()));
+			ResultBO resultBO = ResultBO.builder().build();
 
 			try {
 				// Execute SQL query and get results immediately
 				ResultSetBO resultSetBO = dbAccessor.executeSqlAndReturnObject(dbConfig, dbQueryParameter);
-				String jsonStr = JsonUtil.getObjectMapper().writeValueAsString(resultSetBO);
+				// 调用大模型获取图表配置信息并填充到ResultSetBO中
+				DisplayStyleBO displayStyleBO = enrichResultSetWithChartConfig(state, resultSetBO);
+				resultBO.setResultSet(resultSetBO);
+				resultBO.setDisplayStyle(displayStyleBO);
+
+				String strResultSetJson = JsonUtil.getObjectMapper().writeValueAsString(resultSetBO);
+				String strResultJson = JsonUtil.getObjectMapper().writeValueAsString(resultBO);
 
 				// 数据执行成功
 				emitter.next(ChatResponseUtil.createResponse("执行SQL完成"));
 				emitter.next(ChatResponseUtil.createResponse("SQL查询结果："));
 				emitter.next(ChatResponseUtil.createPureResponse(TextType.RESULT_SET.getStartSign()));
-				emitter.next(ChatResponseUtil.createPureResponse(jsonStr));
+				emitter.next(ChatResponseUtil.createPureResponse(strResultJson));
 				emitter.next(ChatResponseUtil.createPureResponse(TextType.RESULT_SET.getEndSign()));
 
 				// Update step results with the query output
 				Map<String, String> existingResults = StateUtil.getObjectValue(state, SQL_EXECUTE_NODE_OUTPUT,
 						Map.class, new HashMap<>());
 				Map<String, String> updatedResults = PlanProcessUtil.addStepResult(existingResults, currentStep,
-						jsonStr);
+						strResultSetJson);
 
 				log.info("SQL execution successful, result count: {}",
 						resultSetBO.getData() != null ? resultSetBO.getData().size() : 0);
@@ -167,6 +194,99 @@ public class SqlExecuteNode implements NodeAction {
 				state, v -> result, displayFlux);
 
 		return Map.of(SQL_EXECUTE_NODE_OUTPUT, generator);
+	}
+
+	/**
+	 * 调用大模型获取图表配置信息并填充到ResultSetBO中
+	 * @param state 整体状态
+	 * @param resultSetBO SQL执行结果
+	 */
+	private DisplayStyleBO enrichResultSetWithChartConfig(OverAllState state, ResultSetBO resultSetBO) {
+		// 创建ResultDisplayStyleBO对象
+		DisplayStyleBO displayStyle = new DisplayStyleBO();
+		if (!this.properties.isEnableSqlResultChart()) {
+			log.debug("Sql result chart is disabled, set display style as table default");
+			displayStyle.setType("table");
+			return displayStyle;
+		}
+
+		try {
+			// 获取用户查询
+			String userQuery = StateUtil.getCanonicalQuery(state);
+
+			// 将SQL结果转换为JSON字符串，限制数据量以避免提示词过长
+			String sqlResultJson = JsonUtil.getObjectMapper()
+				.writeValueAsString(resultSetBO.getData() != null
+						? resultSetBO.getData().stream().limit(SAMPLE_DATA_NUMBER).toList() : null);
+
+			// 构建用户提示词，包含SQL结果数据
+			String userPrompt = String.format("""
+					# 正式任务
+
+					<最新>用户输入: %s
+					范例数据: %s
+
+					# 输出
+					""", userQuery != null ? userQuery : "数据可视化", sqlResultJson);
+
+			// 加载data-view-analyze提示词模板（系统提示词）
+			String fullPrompt = PromptLoader.loadPrompt("data-view-analyze");
+			// 分割系统提示词和用户提示词模板
+			String[] parts = fullPrompt.split("=== 用户输入 ===", 2);
+			// 渲染系统提示词（当前没有变量，直接使用模板内容）
+			String systemPrompt = parts[0].trim();
+
+			log.debug("Built chart config generation system prompt as follows \n {} \n", systemPrompt);
+			log.debug("Built chart config generation user prompt as follows \n {} \n", userPrompt);
+
+			// 调用LLM生成图表配置（使用系统提示词和用户提示词）
+			String chartConfigJson = llmService.toStringFlux(llmService.call(systemPrompt, userPrompt))
+				.collect(StringBuilder::new, StringBuilder::append)
+				.map(StringBuilder::toString)
+				.block(Duration.ofMillis(properties.getEnrichSqlResultTimeout()));
+
+			if (chartConfigJson != null && !chartConfigJson.trim().isEmpty()) {
+				String content = MarkdownParserUtil.extractText(chartConfigJson.trim());
+				// 解析JSON并填充到ResultSetBO中
+				Map<String, Object> chartConfig = JsonUtil.getObjectMapper().readValue(content, Map.class);
+
+				// 提取图表配置信息并设置到ResultDisplayStyleBO
+				if (chartConfig.containsKey("type")) {
+					displayStyle.setType((String) chartConfig.get("type"));
+				}
+				else {
+					displayStyle.setType("table");
+				}
+				if (chartConfig.containsKey("title")) {
+					displayStyle.setTitle((String) chartConfig.get("title"));
+				}
+				if (chartConfig.containsKey("x")) {
+					displayStyle.setX((String) chartConfig.get("x"));
+				}
+				if (chartConfig.containsKey("y")) {
+					Object yValue = chartConfig.get("y");
+					if (yValue instanceof String) {
+						String yStr = (String) yValue;
+						// 将逗号分隔的字符串转换为列表
+						displayStyle.setY(java.util.Arrays.asList(yStr.split(",")));
+					}
+					else if (yValue instanceof List) {
+						displayStyle.setY((List<String>) yValue);
+					}
+				}
+				log.debug("Successfully enriched ResultSetBO with chart config: type={}, title={}, x={}, y={}",
+						displayStyle.getType(), displayStyle.getTitle(), displayStyle.getX(), displayStyle.getY());
+				return displayStyle;
+			}
+			else {
+				log.warn("LLM returned empty chart config, using default settings");
+			}
+		}
+		catch (Exception e) {
+			log.error("Failed to enrich ResultSetBO with chart config", e);
+			// 不抛出异常，允许流程继续执行
+		}
+		return null;
 	}
 
 }
