@@ -1,3 +1,5 @@
+中文 | [English](./ARCHITECTURE-en.md)
+
 # 架构设计
 
 本文档详细介绍 DataAgent 的系统架构、核心能力和技术实现。
@@ -394,7 +396,6 @@ sequenceDiagram
 #### 说明要点
 
 - **报告节点**: `ReportGeneratorNode` 读取计划、SQL/Python 结果与摘要建议（`summary_and_recommendations`）
-- **输出格式**: 默认 HTML，`plainReport=true` 输出 Markdown（简洁报告）
 - **优化提示词**: 自动拼接优化配置后生成报告
 
 #### 架构图
